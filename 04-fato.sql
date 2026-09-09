@@ -1,0 +1,55 @@
+-- =====================================================================================
+--  ARQUIVO 4:  A TABELA FATO
+--  Case: Pata Amiga - rede de petshops de SC  |  PostgreSQL 16
+-- =====================================================================================
+--  Rode depois de: 03-dimensoes.sql
+--
+--  UMA fato, UM unico INSERT ... SELECT. A tabela ja existe, vazia (arquivo 02).
+--  4.044 linhas = 4.044 pedidos.
+--
+--  Regra geral: a limpeza dos dados fica nas dimensoes; a fato apenas procura a
+--  linha correta (por JOIN). Nenhuma FK fica nula: quando o dado falta, ela
+--  aponta para a linha -1 (CASE WHEN ... IS NULL THEN -1).
+--
+--  Sugestao: comece pelo esqueleto (numero_pedido + as duas FKs de tempo +
+--  FROM), rode e confira 4.044 linhas; depois acrescente as colunas aos poucos.
+-- =====================================================================================
+
+-- >>> ESCREVA AQUI o INSERT INTO fato_pedido (...) SELECT ... FROM stg_pedido ...
+--
+--  Roteiro das colunas:
+--
+--  * sk_tempo_pedido / sk_tempo_entrega: a chave e a data no formato AAAAMMDD.
+--    Monte com TO_CHAR(<a data>, 'YYYYMMDD')::int. A data do PEDIDO vem no
+--    formato americano com AM/PM: a mascara e 'MM/DD/YYYY HH12:MI AM'
+--    (TO_TIMESTAMP). Usar 'DD/MM/YYYY' faz o PostgreSQL LANCAR ERRO nas datas
+--    com mes maior que 12. Os marcos da entrega ja vem em ISO: ::date basta.
+--    Entrega em branco -> -1.
+--
+--  * sk_loja, sk_categoria: vem de LEFT JOIN; se nao achou par, -1.
+--
+--  * LOJA (LEFT JOIN dim_loja): limpe o nome no ON. REPLACE tira '/SC' e o espaco
+--    duplo; um CASE resolve 3 grafias (digitacao, apelido, abreviacao). O
+--    PostgreSQL compara byte a byte, entao normalize acento e caixa com
+--    UPPER(TRANSLATE(..., 'ÁÀÂÃÉÊÍÓÔÕÚÜÇáàâãéêíóôõúüç',
+--    'AAAAEEIOOOUUCaaaaeeiooouuc')). A chave_loja da dim_loja ja veio em caixa
+--    alta e sem acento.
+--
+--  * CATEGORIA (LEFT JOIN dim_categoria): uma linha so -
+--    ON dc.categoria_origem = p."CategoriaProduto".
+--
+--  * houve_desconto e canal_pedido: padronize com CASE e grave na PROPRIA fato
+--    (nao ha dimensao para eles). O de-para completo dos dois campos esta no
+--    ENUNCIADO, na secao 7 ("Como padronizar o desconto e o canal").
+--    A ordem importa: 'WHATSAPP' contem 'APP',
+--    entao teste WHATS antes de APP. No desconto, tire o acento com TRANSLATE
+--    antes do UPPER.
+--
+--  * dinheiro e itens: '' e '-' viram NULL; tire "R$" e trate o milhar.
+--
+--  * os lags em dias: em PostgreSQL, data - data ja da o numero de dias. Etapa
+--    nao cumprida grava NULL, nunca 0. Use ::date em volta da integracao.
+
+-- =====================================================================================
+--  Confira o resultado com o 00-conferencia.sql (bloco "DEPOIS DO 04").
+-- =====================================================================================
