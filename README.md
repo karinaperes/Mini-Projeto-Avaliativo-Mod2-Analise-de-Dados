@@ -120,8 +120,72 @@ versiona.**
 
 ## 4. Diagnóstico da origem
 
-> ⏳ *Pendente — Tarefa 1: grafias de loja, grafias de categoria, pedidos sem
-> código de loja, pedidos sem nome de loja e marcos de processo em branco.*
+As três tabelas de staging chegaram exatamente como saíram dos sistemas de
+origem: **todas as colunas em `VARCHAR`** — data é texto, valor em reais é
+texto, quantidade é texto. Elas não podem ser alteradas, então todo o
+tratamento acontece nos `INSERT` das dimensões e da fato.
+
+As consultas que produziram os números abaixo estão em
+[`exploracao/diagnostico-origem.sql`](exploracao/diagnostico-origem.sql).
+
+### Volume
+
+| Tabela | O que é | Linhas |
+|---|---|---|
+| `stg_pedido` | pedidos + os 4 marcos do processo de entrega | 4.044 |
+| `stg_loja` | cadastro das lojas — a foto de hoje | 32 |
+| `stg_loja_praca` | loja × praça de atendimento, com o % do público | 48 |
+
+### O que está errado
+
+| Problema | Medida | Consequência |
+|---|---|---|
+| **Grafias de nome de loja** | **128** para 32 lojas | o nome precisa ser padronizado **antes** do lookup |
+| **Grafias de categoria** | **37** para 7 categorias | exige tabela de de-para na `dim_categoria` |
+| **Pedidos sem `Cod Loja`** | **1.575** (39%) | a loja não pode ser encontrada pelo código |
+| **Pedidos sem nome de loja** | **3** | vão para a linha `-1` da `dim_loja` |
+| **Marcos de processo em branco** | **1.077 / 1.338 / 1.665 / 1.953** | viram `NULL`, nunca `0` |
+| Grafias de `CanalPedido` | 20 para 5 canais | padronização na carga da fato |
+| Grafias de `HouveDesconto` | 17 para 3 valores | padronização na carga da fato |
+
+Os quatro marcos, em ordem: separação de estoque, nota fiscal, despacho da
+transportadora e entrega ao cliente.
+
+### Leitura dos números
+
+**128 grafias para 32 lojas.** A mesma loja aparece com acento e sem acento,
+em caixa alta e baixa, com `/SC` no fim, com espaço duplo e com erro de
+digitação. Como o PostgreSQL compara byte a byte, `'Timbo'`, `'TIMBO'` e
+`'Timbó'` são três textos diferentes — e nenhum deles encontra a loja no
+`JOIN` sem normalização prévia dos dois lados.
+
+**1.575 pedidos sem código de loja (39%).** Quase quatro em cada dez pedidos
+não trazem o `Cod Loja`. Isso descarta o caminho óbvio — ligar pelo código —
+e obriga o lookup a ser feito pelo **nome**, que é justamente o campo com 128
+grafias. Os dois defeitos se combinam: é por isso que a padronização do nome
+tem de vir antes do lookup, e não depois.
+
+**37 grafias para 7 categorias**, com uma armadilha: `Ração Medicamentosa`
+não é ração, é medicamento. Como a grafia contém tanto `MED` quanto `RA`, a
+ordem dos testes decide o resultado — `MED` precisa ser avaliado primeiro.
+
+**1.953 marcos de entrega em branco não são erro: são processo em aberto.**
+Quase metade dos pedidos ainda não havia sido entregue no fim da janela. Esses
+campos viram `NULL` nas colunas de dias, nunca `0` — a média (`AVG`) ignora
+`NULL`, mas soma o zero, e um zero no lugar de "não aconteceu" faria o gargalo
+da P1 parecer mais rápido do que é.
+
+**Dois formatos de data convivem na mesma tabela.** A data do pedido vem no
+padrão americano com AM/PM (`09/01/2023 10:07 AM`), porque a plataforma de
+e-commerce é de fornecedor norte-americano e nunca foi localizada. Já os
+quatro marcos da entrega vêm em ISO (`2023-09-02`). Cada coluna exige a sua
+máscara — e usar `DD/MM/YYYY` na data do pedido faz o PostgreSQL **lançar
+erro** nas datas cujo mês é maior que 12.
+
+**Números em formatos misturados.** A mesma coluna de valor traz
+`R$ 1.850,00`, `1850.00`, `1.200`, `-` e vazio. O `-` e o vazio significam
+ausência de informação e viram `NULL` — gravá-los como `0` inventaria um
+faturamento que não existe.
 
 ---
 
