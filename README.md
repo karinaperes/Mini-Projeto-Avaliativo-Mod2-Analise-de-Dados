@@ -191,8 +191,128 @@ faturamento que não existe.
 
 ## 5. Decisões de tratamento
 
-> ⏳ *Pendente — Tarefa 2: máscaras de data, regra dos números, de-para de
-> categoria e padronização do nome da loja.*
+As três tabelas de staging não podem ser alteradas — nada de `UPDATE`, nada de
+`ALTER`. Todo o tratamento acontece nos `INSERT` das dimensões e da fato.
+
+O princípio que organiza tudo: **a limpeza fica na dimensão, e a fato apenas
+procura a linha certa.** A única exceção é o nome da loja, porque a `dim_loja`
+já veio pronta — ali a normalização precisa acontecer dentro do `JOIN`.
+
+### Datas: duas máscaras na mesma tabela
+
+| Coluna | Como vem | Conversão |
+|---|---|---|
+| `DtHoraPedido`, `DtHoraIntegracaoERP` | `09/01/2023 10:07 AM` | `TO_TIMESTAMP(col, 'MM/DD/YYYY HH12:MI AM')` |
+| Os 4 marcos da entrega | `2023-09-02` | `col::date` |
+| Chave da `dim_tempo` | `20231116` | `TO_CHAR(data, 'YYYYMMDD')::int` |
+
+A data do pedido está no **formato americano**: a plataforma de e-commerce é de
+fornecedor norte-americano e nunca foi localizada. Usar `DD/MM/YYYY` não devolve
+resultado errado — o PostgreSQL **lança erro** nas datas cujo mês é maior que 12.
+
+A chave da `dim_tempo` é a própria data em número, então a fato monta as duas
+FKs de tempo **por cálculo, sem `JOIN`**.
+
+### Números: vazio e `-` viram `NULL`, nunca `0`
+
+A mesma coluna de valor traz `R$ 1.850,00`, `1850.00`, `1.200`, `-` e vazio. O
+tratamento remove o `R$`, tira o ponto de milhar e troca a vírgula por ponto.
+
+`-` e vazio significam **ausência de informação**, e viram `NULL`. Gravar `0`
+inventaria um faturamento que não existe e, nas colunas de dias, faria o
+processo parecer mais rápido do que é — porque `AVG` ignora `NULL`, mas soma o
+zero.
+
+Resultado: 3.787 pedidos com quantidade preenchida e 3.923 com valor. Os demais
+ficam `NULL` e são medidos na seção 7.
+
+### Categoria: de-para com ordem obrigatória
+
+As 37 grafias viram 7 categorias padronizadas. O `CASE` testa **"se contém"**,
+não igualdade — porque `Hig.`, `higiene` e `Higiene e Beleza` não caberiam numa
+lista de valores exatos.
+
+A ordem dos testes não é livre:
+
+```
+1. MED  →  Medicamento
+2. PETISC, 3. RA, 4. HIG, 5. BRINQ, 6. ACESS, 7. SERV
+```
+
+`Ração Medicamentosa` contém **`MED` e `RA` ao mesmo tempo**. Como o `CASE` para
+na primeira condição verdadeira, testar `RA` antes mandaria o item para Racao e
+a P2 sairia com o número trocado.
+
+Os trechos testados são curtos e sem acento de propósito. Descobri isso ao
+listar os prefixos de 3 letras da origem: `RAC` e `RAÇ` apareciam separados, o
+que me obrigaria a dois `WHEN` para a mesma categoria. Testar `RA` — que para
+antes do C/Ç — resolve as duas grafias num ramo só.
+
+**Decisão de modelagem:** ração medicamentosa foi agrupada em Medicamento
+porque o comportamento comercial é de medicamento — venda sob prescrição, não
+reposição de alimento. A grafia crua permanece em `categoria_origem`, então a
+separação continua possível sem refazer a carga.
+
+### Nome da loja: padronizar antes do lookup
+
+39% dos pedidos vieram sem `Cod Loja`, então a loja precisa ser encontrada pelo
+**nome** — o campo com 128 grafias. Como o PostgreSQL compara byte a byte,
+`'Timbo'`, `'TIMBO'` e `'Timbó'` são três textos diferentes.
+
+A normalização acontece **dentro do `ON`**, antes da comparação:
+
+1. `REPLACE` remove o sufixo `/SC` e o espaço duplo
+2. `TRIM` remove espaço das pontas
+3. `TRANSLATE` troca cada letra acentuada pela equivalente sem acento
+4. `UPPER` põe tudo em caixa alta
+
+Isso reduz 128 grafias a **36**. As quatro que ainda não encontram a loja:
+
+| Grafia | Vira | Tipo | Pedidos |
+|---|---|---|---|
+| `PATA AMIGA JGUA DO SUL` | `PATA AMIGA JARAGUA DO SUL` | abreviação | 43 |
+| `PATA AMIGA FLORIPA NORTE` | `PATA AMIGA FLORIANOPOLIS NORTE` | apelido | 42 |
+| `PATA AMIGA BLUMENAL CENTRO` | `PATA AMIGA BLUMENAU CENTRO` | erro de digitação | 41 |
+| *(vazio)* | — | sem dado na origem | 3 |
+
+As três primeiras não saem com `REPLACE`: cada uma é um caso único, resolvido
+com um `CASE` escrito à mão. A quarta não tem conserto — o dado não existe, e
+esses 3 pedidos vão para a linha `-1`.
+
+O `JOIN` é `LEFT JOIN`: com `JOIN` simples, esses 3 pedidos seriam descartados e
+a fato teria 4.041 linhas em vez de 4.044.
+
+### Desconto e canal: padronizados na própria fato
+
+São dois domínios de poucos valores, sem nada pendurado neles — não viram
+dimensão. 17 grafias de desconto viram `Sim` / `Nao` / `Nao Informado`; 20
+grafias de canal viram os 5 canais mais `Nao Informado`.
+
+Aqui a ordem também importa: **`WHATSAPP` contém `APP`**. Testar `APP` antes
+jogaria os 414 pedidos de WhatsApp para dentro do App, e a P3 sairia errada.
+
+### Linha `-1`: nenhuma FK fica nula
+
+Toda dimensão recebe uma linha `-1` = "Nao Informado", inserida **antes** da
+carga. Quando o dado falta, a FK aponta para ela em vez de ficar nula.
+
+O efeito prático é a reconciliação: como todo pedido consegue apontar para
+alguma linha, nenhum `JOIN` descarta pedido, a fato fecha em 4.044 linhas e o
+faturamento bate com a origem.
+
+A `bridge_loja_praca` **não** recebe linha `-1` — ela não é dimensão, é uma
+ponte: registra quais lojas atendem quais praças, e "loja não informada atende
+praça não informada" não significa nada.
+
+### O que ficou de fora da fato
+
+A `stg_pedido` também traz valor bruto, desconto em reais, unidades devolvidas,
+itens cancelados, peso e frete. Nenhuma das cinco perguntas usa esses campos, e
+por isso eles não entraram: há **uma** coluna de dinheiro na fato, não três.
+
+Percentuais e taxas também não são gravados — eles não são aditivos, e somar
+percentual de percentual não produz resultado válido. São calculados na consulta
+que os pede.
 
 ---
 
