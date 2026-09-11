@@ -87,16 +87,12 @@ GROUP BY "CodPraca";
 --  tabela propria, com o FATOR DE RATEIO dentro (os fatores de uma loja somam
 --  1,00). A ponte usa o COD DA LOJA, nao a sk_loja.
 
-INSERT INTO dim_bridge_loja_praca (cod_loja, sk_praca, fator_publico)                      
-VALUES (-1, 'Nao Informado', NULL, NULL);
-
 INSERT INTO bridge_loja_praca (cod_loja, sk_praca, fator_publico)
 SELECT lp."CodLoja",
        dp.sk_praca,
        CAST(lp."PercentualPublico" AS DECIMAL(6,4))
 FROM stg_loja_praca lp
 JOIN dim_praca dp ON dp.cod_praca = lp."CodPraca";
-
 
 
 -- =====================================================================================
