@@ -15,7 +15,7 @@
 --  FROM), rode e confira 4.044 linhas; depois acrescente as colunas aos poucos.
 -- =====================================================================================
 
--- INSERT INTO fato_pedido (
+INSERT INTO fato_pedido (
     numero_pedido, sk_tempo_pedido, sk_tempo_entrega, sk_loja, sk_categoria,
     houve_desconto, canal_pedido, dt_pedido, qt_itens, vl_liquido,
     dias_integracao_separacao, dias_separacao_nota, dias_nota_despacho,
