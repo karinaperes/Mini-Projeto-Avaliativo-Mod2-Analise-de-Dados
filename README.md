@@ -447,3 +447,7 @@ valor de venda, não custo.
   separar causa de correlação na P3.
 - **Trazer o custo do produto**, para trocar faturamento por margem na P2.
 - **Acompanhar os 1.953 pedidos em aberto** e refazer a P1 com a janela fechada.
+
+## 8. Vídeo
+
+[Apresentação em vídeo](https://youtu.be/kUBLXmZyO7o)
